@@ -2661,24 +2661,6 @@ static inline void update_cfs_shares(struct sched_entity *se)
 }
 #endif /* CONFIG_FAIR_GROUP_SCHED */
 
-u32 sched_get_wake_up_idle(struct task_struct *p)
-{
-	return 0;
-}
-EXPORT_SYMBOL(sched_get_wake_up_idle);
-
-int sched_set_wake_up_idle(struct task_struct *p, int wake_up_idle)
-{
-	return 0;
-}
-EXPORT_SYMBOL(sched_set_wake_up_idle);
-
-int core_ctl_set_boost(bool boost)
-{
-	return 0;
-}
-EXPORT_SYMBOL(core_ctl_set_boost);
-
 #ifdef CONFIG_SMP
 static const u32 runnable_avg_yN_inv[] = {
 	0xffffffff, 0xfa83b2da, 0xf5257d14, 0xefe4b99a, 0xeac0c6e6, 0xe5b906e6,
@@ -4828,7 +4810,6 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 		if (cfs_rq_throttled(cfs_rq))
 			break;
 		cfs_rq->h_nr_running++;
-		walt_inc_cfs_cumulative_runnable_avg(cfs_rq, p);
 
 		flags = ENQUEUE_WAKEUP;
 	}
@@ -4836,7 +4817,6 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	for_each_sched_entity(se) {
 		cfs_rq = cfs_rq_of(se);
 		cfs_rq->h_nr_running++;
-		walt_inc_cfs_cumulative_runnable_avg(cfs_rq, p);
 
 		if (cfs_rq_throttled(cfs_rq))
 			break;
@@ -4871,7 +4851,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	schedtune_enqueue_task(p, cpu_of(rq));
 
 	if (!se) {
-		walt_inc_cumulative_runnable_avg(rq, p);
+
 		if (!task_new && !rq->rd->overutilized &&
 		    cpu_overutilized(rq->cpu)) {
 			rq->rd->overutilized = true;
@@ -4912,7 +4892,6 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 		if (cfs_rq_throttled(cfs_rq))
 			break;
 		cfs_rq->h_nr_running--;
-		walt_dec_cfs_cumulative_runnable_avg(cfs_rq, p);
 
 		/* Don't dequeue parent if it has other entities besides us */
 		if (cfs_rq->load.weight) {
@@ -4934,7 +4913,6 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 
 		cfs_rq = cfs_rq_of(se);
 		cfs_rq->h_nr_running--;
-		walt_dec_cfs_cumulative_runnable_avg(cfs_rq, p);
 
 		if (cfs_rq_throttled(cfs_rq))
 			break;
@@ -9561,16 +9539,6 @@ static int active_load_balance_cpu_stop(void *data)
 	struct rq *target_rq = cpu_rq(target_cpu);
 	struct sched_domain *sd = NULL;
 	struct task_struct *p = NULL;
-	struct task_struct *push_task = NULL;
-	int push_task_detached = 0;
-	struct lb_env env = {
-		.sd		= sd,
-		.dst_cpu	= target_cpu,
-		.dst_rq		= target_rq,
-		.src_cpu	= busiest_rq->cpu,
-		.src_rq		= busiest_rq,
-		.idle		= CPU_IDLE,
-	};
 
 	raw_spin_lock_irq(&busiest_rq->lock);
 
@@ -9590,16 +9558,6 @@ static int active_load_balance_cpu_stop(void *data)
 	 */
 	BUG_ON(busiest_rq == target_rq);
 
-	push_task = busiest_rq->push_task;
-	if (push_task) {
-		if (task_on_rq_queued(push_task) &&
-				task_cpu(push_task) == busiest_cpu) {
-			detach_task(push_task, &env);
-			push_task_detached = 1;
-		}
-		goto out_unlock;
-	}
-
 	/* Search for an sd spanning us and the target CPU. */
 	rcu_read_lock();
 	for_each_domain(target_cpu, sd) {
@@ -9609,7 +9567,15 @@ static int active_load_balance_cpu_stop(void *data)
 	}
 
 	if (likely(sd)) {
-		env.sd = sd;
+		struct lb_env env = {
+			.sd		= sd,
+			.dst_cpu	= target_cpu,
+			.dst_rq		= target_rq,
+			.src_cpu	= busiest_rq->cpu,
+			.src_rq		= busiest_rq,
+			.idle		= CPU_IDLE,
+		};
+
 		schedstat_inc(sd, alb_count);
 		update_rq_clock(busiest_rq);
 
@@ -9624,16 +9590,7 @@ static int active_load_balance_cpu_stop(void *data)
 out_unlock:
 	busiest_rq->active_balance = 0;
 
-	if (push_task)
-		busiest_rq->push_task = NULL;
-
 	raw_spin_unlock(&busiest_rq->lock);
-
-	if (push_task) {
-		if (push_task_detached)
-			attach_one_task(target_rq, push_task);
-		put_task_struct(push_task);
-	}
 
 	if (p)
 		attach_one_task(target_rq, p);
@@ -10011,10 +9968,6 @@ static inline bool nohz_kick_needed(struct rq *rq)
 	if (rq->nr_running >= 2 &&
 	    (!energy_aware() || cpu_overutilized(cpu)))
 		return true;
-
-	/* Do idle load balance if there have misfit task */
-	if (energy_aware())
-		return rq->misfit_task;
 
 	rcu_read_lock();
 	sd = rcu_dereference(per_cpu(sd_busy, cpu));
