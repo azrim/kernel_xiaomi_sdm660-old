@@ -25,7 +25,7 @@
 #ifdef CONFIG_BOEFFLA_WL_BLOCKER
 char list_wl[255];
 char list_wl_search[257];
-bool wl_blocker_active = false;
+bool wl_blocker_active = true;
 bool wl_blocker_debug = false;
 #endif
 
